@@ -1,4 +1,4 @@
-import argpase
+import argparse
 import time
 from collections import deque
 
@@ -24,6 +24,7 @@ def parse_args():
         "--threshold",
         type=float,
         default=50.0
+        ,
         help="Threshold for emotion detection",
     )
     parser.add_argument(
@@ -69,4 +70,3 @@ def overlay_transparent(background, overlay, x, y):
             background[y:y+ov_h, x:x+ov_w] = overlay
         return background
     
-

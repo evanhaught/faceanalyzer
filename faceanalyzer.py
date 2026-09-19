@@ -12,11 +12,14 @@ from deepface import DeepFace
 def parse_args():
     parser = argparse.ArgumentParser(description="Face Analyzer")
     parser.add_argument(
-        "--emotion",
-        type=str,
-        default="happy",
-        choices=["angry", "disgust", "fear", "happy", "sad", "surprise", "neutral"],
-        help="Emotion to detect",
+        "--map",
+        action="append",
+        default=None,
+        metavar="EMOTION:IMAGE_PATH",
+        help=(
+            "Map an emotion to an image, e.g. --map happy:images/happy.png "
+            "--map angry:images/mad.png. Repeat for each emotion you want."
+        ),
     )
     parser.add_argument("--image", required=True, help="Path to the input image")
     parser.add_argument("--threshold", type=float, default=50.0)
@@ -187,6 +190,11 @@ class EmotionAnalyzer:
  
 def main():
     args = parse_args()
+    if args.map is None:
+        args.map = [
+            "happy:images/happy.png",
+            "angry:images/mad.png",
+        ]
  
     cap = open_real_camera(
         forced_index=args.camera_index,

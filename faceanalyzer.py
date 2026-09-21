@@ -1,4 +1,3 @@
-
 import argparse
 import threading
 import time
@@ -18,10 +17,10 @@ def parse_args():
         metavar="EMOTION:IMAGE_PATH",
         help=(
             "Map an emotion to an image, e.g. --map happy:images/happy.png "
-            "--map angry:images/mad.png. Repeat for each emotion you want."
+            "--map angry:images/mad.png. Repeat for each emotion you want. "
+            "If omitted, built-in defaults are used."
         ),
     )
-    parser.add_argument("--image", required=True, help="Path to the input image")
     parser.add_argument("--threshold", type=float, default=50.0)
     parser.add_argument("--hold-frames", type=int, default=3)
     parser.add_argument(
@@ -35,7 +34,7 @@ def parse_args():
         "--analysis-width",
         type=int,
         default=320,
-        help="Frame is downscaled to this width before analysis (speeds up detection a lot).",
+        help="Frame is downscaled to this width before analysis (speeds up detection).",
     )
     parser.add_argument("--camera-index", type=int, default=None)
     parser.add_argument("--capture-width", type=int, default=640)
@@ -51,6 +50,22 @@ def load_overlay_image(path, target_height):
     scale = target_height / h
     new_w, new_h = int(w * scale), target_height
     return cv2.resize(image, (new_w, new_h))
+ 
+ 
+def parse_emotion_map(map_args, target_height):
+    """Turns ['happy:images/happy.png', 'angry:images/mad.png'] into
+    {'happy': loaded_image, 'angry': loaded_image}."""
+    valid_emotions = {"angry", "disgust", "fear", "happy", "sad", "surprise", "neutral"}
+    emotion_images = {}
+    for entry in map_args:
+        if ":" not in entry:
+            raise ValueError(f"--map '{entry}' must be in the form emotion:path")
+        emotion, path = entry.split(":", 1)
+        emotion = emotion.strip().lower()
+        if emotion not in valid_emotions:
+            raise ValueError(f"'{emotion}' is not a valid emotion. Choose from: {sorted(valid_emotions)}")
+        emotion_images[emotion] = load_overlay_image(path.strip(), target_height)
+    return emotion_images
  
  
 def overlay_transparent(background, overlay, x, y):
@@ -116,7 +131,7 @@ class EmotionAnalyzer:
     """
     Runs DeepFace.analyze on a background thread so the main video loop
     never blocks waiting for it. The main loop just reads whatever the
-    latest result is
+    latest result is.
     """
  
     def __init__(self, detector_backend, analysis_width):
@@ -139,13 +154,12 @@ class EmotionAnalyzer:
         while self.running:
             with self.lock:
                 frame = self.latest_frame
-                self.latest_frame = None  
+                self.latest_frame = None
  
             if frame is None:
                 time.sleep(0.01)
                 continue
  
-            # Downscale for faster detection/analysis.
             h, w = frame.shape[:2]
             scale = self.analysis_width / w
             small = cv2.resize(frame, (self.analysis_width, int(h * scale)))
@@ -176,13 +190,9 @@ class EmotionAnalyzer:
                     self.last_confidence = 0.0
                     self._latest_emotions = {}
  
-    def get_target_confidence(self, target_emotion):
+    def get_emotions(self):
         with self.lock:
-            return (
-                float(self._latest_emotions.get(target_emotion, 0.0)),
-                self.last_emotion_label,
-                self.last_confidence,
-            )
+            return dict(self._latest_emotions), self.last_emotion_label, self.last_confidence
  
     def stop(self):
         self.running = False
@@ -203,7 +213,7 @@ def main():
     )
     if cap is None:
         print("Error: No camera produced a real (non-black) frame.")
-        print("Try turning off Continuity Camera on a nearby iPhone and rerun.")
+        print("Turn off Continuity Camera on a nearby iPhone and rerun.")
         return
  
     frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or args.capture_width
@@ -211,15 +221,17 @@ def main():
     print(f"Frame size: {frame_width} x {frame_height}")
     print(f"Detector backend: {args.detector} (analysis width {args.analysis_width}px)")
  
-    overlay_img = load_overlay_image(args.image, target_height=frame_height)
-    canvas_w = frame_width + overlay_img.shape[1]
+    emotion_images = parse_emotion_map(args.map, target_height=frame_height)
+    max_overlay_width = max(img.shape[1] for img in emotion_images.values())
+    canvas_w = frame_width + max_overlay_width
+ 
+    print("Watching for:", ", ".join(emotion_images.keys()))
+    print(f"Threshold {args.threshold}%. Press 'q' to quit.")
  
     analyzer = EmotionAnalyzer(args.detector, args.analysis_width)
-    hits = deque(maxlen=args.hold_frames)
+    hits = {emotion: deque(maxlen=args.hold_frames) for emotion in emotion_images}
     frame_count = 0
-    submit_every = 3  # hand off a frame for analysis every N displayed frames
- 
-    print(f"Watching for '{args.emotion}' (threshold {args.threshold}%). Press 'q' to quit.")
+    submit_every = 3
  
     try:
         while True:
@@ -232,9 +244,14 @@ def main():
             if frame_count % submit_every == 0:
                 analyzer.submit_frame(frame.copy())
  
-            target_confidence, label, confidence = analyzer.get_target_confidence(args.emotion)
-            hits.append(target_confidence >= args.threshold)
-            show_overlay = len(hits) == args.hold_frames and all(hits)
+            emotions, label, confidence = analyzer.get_emotions()
+ 
+            active_emotion = None
+            for emotion in emotion_images:
+                score = float(emotions.get(emotion, 0.0))
+                hits[emotion].append(score >= args.threshold)
+                if len(hits[emotion]) == args.hold_frames and all(hits[emotion]):
+                    active_emotion = emotion
  
             canvas = np.zeros((frame_height, canvas_w, 3), dtype=np.uint8)
             canvas[:, :frame_width] = frame
@@ -242,8 +259,8 @@ def main():
             cv2.putText(canvas, f"{label} ({confidence:.0f}%)", (10, 30),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
  
-            if show_overlay:
-                canvas = overlay_transparent(canvas, overlay_img, frame_width, 0)
+            if active_emotion is not None:
+                canvas = overlay_transparent(canvas, emotion_images[active_emotion], frame_width, 0)
  
             cv2.imshow("Emotion Overlay", canvas)
             if cv2.waitKey(1) & 0xFF == ord("q"):

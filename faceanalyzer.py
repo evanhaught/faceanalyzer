@@ -128,7 +128,10 @@ def open_real_camera(forced_index=None, max_index=4, warmup_frames=15, min_mean=
 
 def load_presence_cascade():
     """
-    Loads a Haar cascade for a cheap face-presence pre-check. 
+    Loads a Haar cascade for a cheap face-presence pre-check. This is
+    dependency-free (uses only cv2, already required) unlike mediapipe,
+    which pulls in a bundled TensorFlow that can conflict with DeepFace's
+    own TensorFlow install.
     """
     cascade_path = os.path.join(os.path.dirname(cv2.__file__), "data", "haarcascade_frontalface_default.xml")
     if not os.path.isfile(cascade_path):
@@ -146,8 +149,8 @@ def load_presence_cascade():
 class EmotionAnalyzer:
     """
     Runs DeepFace.analyze on a background thread so the main video loop
-    never blocks waiting for it. Before doing DeepFace
-    analysis, a very cheap Haar-cascade face-presence check runs first. If it determines
+    never blocks waiting for it. Before doing the (expensive) DeepFace
+    analysis, a very cheap Haar-cascade face-presence check runs first --
     if no face is likely present, DeepFace is skipped entirely for that
     frame, saving a large amount of CPU whenever no one is in view.
     """
